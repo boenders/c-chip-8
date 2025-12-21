@@ -45,6 +45,7 @@
 
 memory_subsystem *memory_init(void) {
     memory_subsystem *m = malloc(sizeof *m);
+    memset(m->memory, 0, sizeof(m->memory));
     uint8_t font[] = FONT;
     memcpy(m->memory + FONT_POSITION, font, sizeof(font));
 

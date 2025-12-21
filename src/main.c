@@ -17,29 +17,27 @@
 void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
             SDL_Scancode code);
 uint8_t scancode_to_key(SDL_Scancode code);
+void print_help();
+
+// Flags to enable/disable quirky behavior depending on application
+// requirements.
 uint8_t flags =
     VF_RESET | MEMORY_INDEX_INCREMENT | DISPLAY_WAIT | DISPLAY_CLIPPING;
 // Flag used to slow sprite rendering to 60 sprites a second.
 bool ready = true;
 
 int main(int argc, char **argv) {
-    printf("Got %i arguments", argc);
     if (argc < 2) {
-        fprintf(stdout, "Arguments to specify: [arguments] gamefile\n\n");
-        fprintf(stdout, "--disable-vf-reset  And, Or, Xor no longer affect the "
-                        "flag register\n");
-        fprintf(stdout, "--disable-memory-index-increment  Disable load/save "
-                        "to affecting the index register\n");
-        fprintf(stdout, "--disable-display-wait  Disables for the vertical "
-                        "blank interrup\n");
-        fprintf(stdout, "--disable-clipping  Allows sprites to overflow and be "
-                        "drawn on the other side\n");
-        fprintf(stdout,
-                "--shifting-vx  Sets shifting to not take vy into account\n");
-        fprintf(stdout, "--jumping-use-vx  Jumping uses vx instead of v0\n\n");
-        fflush(stdout);
+        print_help();
         return 1;
     }
+    // Very simple solution to check for flags that appear in the arguments.
+    //
+    // Due to the simplicity, specifying the same flag multiple times will
+    // negate itself, e.g. twice is the same as not at all.
+    //
+    // A more complex, easier to extend solution would be possible but is not
+    // necessary for the small project.
     for (int i = 1; i < argc; i++) {
         if (!memcmp(*(argv + i), "--disable-vf-reset", strlen(*(argv + i)))) {
             flags ^= VF_RESET;
@@ -64,41 +62,41 @@ int main(int argc, char **argv) {
     int rc = 0;
     FILE *fptr = fopen(filepath, "rb");
     if (!fptr) {
-        printf("Could not open file: %s", *(argv + argc - 1));
+        printf("Could not open file: %s\n\n", *(argv + argc - 1));
+        print_help();
         rc = 1;
         goto exit;
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
-        return 1;
+        rc = 1;
+        goto cleanup_file;
     }
 
     SDL_Window *win =
         SDL_CreateWindow("Chip-8", 800, 600, SDL_WINDOW_RESIZABLE);
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
-        SDL_Quit();
-        return 1;
+        rc = 1;
+        goto cleanup_file;
     }
 
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
     if (!ren) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
-        SDL_DestroyWindow(win);
-        SDL_Quit();
-        return 1;
+        rc = 1;
+        goto cleanup_window;
     }
 
     int running = 1;
     renderer *r = renderer_init(ren);
     memory_subsystem *mem = memory_init();
-    if (!r) {
-        fprintf(stderr, "Renderer init error: %s\n", SDL_GetError());
-        SDL_DestroyWindow(win);
-        SDL_DestroyRenderer(ren);
-        SDL_Quit();
-        return 1;
+    if (!r || !mem) {
+        fprintf(stderr, "Renderer or memory subsystem init error: %s\n",
+                SDL_GetError());
+        rc = 1;
+        goto cleanup_sdl_renderer;
     }
 
     if (!fread(mem->memory + PROGRAM_START, 1, MEMORY - PROGRAM_START, fptr)) {
@@ -134,12 +132,9 @@ int main(int argc, char **argv) {
             renderer_lineup_pixels(r);
         }
 
-        // Fetch
-        uint16_t instruction = memory_get_instruction(mem);
-        decode(instruction, mem, r, code);
-
         // Every 16ms -> 60 reductions a second
-        if (16660000 < SDL_GetTicksNS() - timestamp) {
+        if (16000000 < SDL_GetTicksNS() - timestamp) {
+            ready = true;
             timestamp = SDL_GetTicksNS();
 
             if (memory_get_delay_timer(mem) > 0) {
@@ -148,20 +143,25 @@ int main(int argc, char **argv) {
             if (memory_get_sound_timer(mem) > 0) {
                 memory_set_sound_timer(mem, memory_get_sound_timer(mem) - 1);
             }
-            ready = true;
         }
 
-        // 1.5ms
+        uint16_t instruction = memory_get_instruction(mem);
+        decode(instruction, mem, r, code);
+
+        // 1.5ms -> achieve an execution time roughly similar to the original
+        // chip-8 system.
         SDL_DelayNS(1500000);
     }
-
 cleanup:
-    fclose(fptr);
     memory_free(mem);
     renderer_free(r);
+cleanup_sdl_renderer:
     SDL_DestroyRenderer(ren);
+cleanup_window:
     SDL_DestroyWindow(win);
     SDL_Quit();
+cleanup_file:
+    fclose(fptr);
 exit:
     return rc;
 }
@@ -182,6 +182,9 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
     uint16_t address;
     uint8_t value;
     uint8_t value_two;
+    uint8_t key_code;
+
+    printf("Registered an instruction %x\n", instruction);
 
     switch ((instruction >> 12) & 0x000F) {
     case 0x0:
@@ -331,14 +334,11 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
         }
         break;
     case 0xE:
+        key_code = scancode_to_key(code);
         uint8_t key = memory_get_register(mem, getX(instruction));
-        if (code == 0)
-            break;
-        uint8_t key_code = scancode_to_key(code);
         if ((getNN(instruction)) == 0x9E && key == key_code) {
             memory_skip_instruction(mem);
-        } else if ((getNN(instruction)) == 0xA1 && key != key_code &&
-                   0xFF != code) {
+        } else if ((getNN(instruction)) == 0xA1 && key != key_code) {
             memory_skip_instruction(mem);
         }
         break;
@@ -365,7 +365,7 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
             }
             break;
         case 0x0A:
-            uint8_t key_code = scancode_to_key(code);
+            key_code = scancode_to_key(code);
             if (key_code == 0xFF) {
                 memory_repeat_instruction(mem);
             } else {
@@ -435,4 +435,20 @@ uint8_t scancode_to_key(SDL_Scancode code) {
     default:
         return 0xFF;
     }
+}
+
+void print_help() {
+    fprintf(stdout, "Arguments to specify: [arguments] gamefile\n\n");
+    fprintf(stdout, "--disable-vf-reset  And, Or, Xor no longer affect the "
+                    "flag register\n");
+    fprintf(stdout, "--disable-memory-index-increment  Disable load/save "
+                    "to affecting the index register\n");
+    fprintf(stdout, "--disable-display-wait  Disables for the vertical "
+                    "blank interrup\n");
+    fprintf(stdout, "--disable-clipping  Allows sprites to overflow and be "
+                    "drawn on the other side\n");
+    fprintf(stdout,
+            "--shifting-vx  Sets shifting to not take vy into account\n");
+    fprintf(stdout, "--jumping-use-vx  Jumping uses vx instead of v0\n\n");
+    fflush(stdout);
 }

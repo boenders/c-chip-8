@@ -8,7 +8,9 @@
 bool renderer_lineup_pixels(renderer *r);
 
 renderer *renderer_init(SDL_Renderer *sdl_renderer) {
-    renderer *r = malloc(sizeof(renderer));
+    renderer *r = calloc(1, sizeof *r);
+    memset(r->bits, 0, sizeof(r->bits));
+    memset(r->pixels, 0, sizeof(r->pixels));
     r->sdl_renderer = sdl_renderer;
     if (!renderer_lineup_pixels(r)) {
         return NULL;
