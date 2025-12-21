@@ -18,15 +18,27 @@ renderer *renderer_init(SDL_Renderer *sdl_renderer) {
 void renderer_free(renderer *r) { free(r); }
 
 int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
-                  uint8_t height) {
+                  uint8_t height, bool clipping) {
     uint64_t *row = r->bits + y;
     int result = 0;
-    // Each draw is 4px wide
+    // Each draw is 8px wide, so only the height needs to be considered.
     for (int i = 0; i < height; i++) {
-        // Put sprite in the beginning
+        // Like the rows the coloring variable uses a uint64 as this
+        // conveniently represents one whole row of the display.
+        //
+        // The sprite is initially positioned in the last eight bits of the
+        // coloring int. Depending on x the coloring will be shifted to the
+        // correct position. the offset constant is 56 (64 - 8), as this will
+        // shift the sprite all the way to the first bit when x = 0.
         uint64_t coloring = ((*sprite));
         if (x > 56) {
-            coloring = coloring >> (x - 56);
+            // Ambigous case, depending on the flag a color will be wrapped
+            // to the other side or be clipped because it is off the screen.
+            if (clipping) {
+                coloring = coloring >> (x - 56);
+            } else {
+                coloring = coloring >> (x - 56) | coloring << (56 - x);
+            }
         } else {
             coloring = coloring << (56 - x);
         }
@@ -37,8 +49,13 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
         *row = *row ^ coloring;
         sprite += 1;
         row += 1;
-        if (i + y + 1 == HEIGHT)
-            break;
+        if (i + y + 1 == HEIGHT) {
+            if (clipping) {
+                break;
+            } else {
+                row = r->bits;
+            }
+        }
     }
     if (!render_image(r, r->bits)) {
         result = 2;
@@ -54,7 +71,6 @@ bool render_clear(renderer *r) {
 }
 
 bool render_image(renderer *r, uint64_t *bits) {
-    printf("Rendering image\n");
     uint64_t *target = bits;
     uint64_t comparator = 1;
     comparator = comparator << 63;

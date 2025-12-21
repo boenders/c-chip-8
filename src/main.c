@@ -32,8 +32,8 @@ int main(int argc, char **argv) {
                         "to affecting the index register\n");
         fprintf(stdout, "--disable-display-wait  Disables for the vertical "
                         "blank interrup\n");
-        fprintf(stdout,
-                "--disable-clipping  Allows sprites to overflow to the top\n");
+        fprintf(stdout, "--disable-clipping  Allows sprites to overflow and be "
+                        "drawn on the other side\n");
         fprintf(stdout,
                 "--shifting-vx  Sets shifting to not take vy into account\n");
         fprintf(stdout, "--jumping-use-vx  Jumping uses vx instead of v0\n\n");
@@ -320,9 +320,10 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
         uint8_t count = getN(instruction);
         uint8_t *sprite = memory_get_sprite(mem);
 
-        int result = render_sprite(
-            r, memory_get_register(mem, register_x) % WIDTH,
-            memory_get_register(mem, register_y) % HEIGHT, sprite, count);
+        int result =
+            render_sprite(r, memory_get_register(mem, register_x) % WIDTH,
+                          memory_get_register(mem, register_y) % HEIGHT, sprite,
+                          count, (flags & DISPLAY_CLIPPING));
         if (result == 1) {
             memory_set_register(mem, 0xF, 1);
         } else {

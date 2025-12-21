@@ -20,7 +20,7 @@ typedef struct {
  */
 renderer *renderer_init(SDL_Renderer *sdl_renderer);
 void renderer_free(renderer *r);
-int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite, uint8_t count);
+int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite, uint8_t count, bool clipping);
 bool render_image(renderer *r, uint64_t *bits);
 bool render_clear(renderer *r);
 bool renderer_lineup_pixels(renderer *r);
