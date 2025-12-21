@@ -142,11 +142,11 @@ int main(int argc, char **argv) {
         if (16660000 < SDL_GetTicksNS() - timestamp) {
             timestamp = SDL_GetTicksNS();
 
-            if (mem->delay_timer > 0) {
-                mem->delay_timer--;
+            if (memory_get_delay_timer(mem) > 0) {
+                memory_set_delay_timer(mem, memory_get_delay_timer(mem) - 1);
             }
-            if (mem->sound_timer > 0) {
-                mem->sound_timer--;
+            if (memory_get_sound_timer(mem) > 0) {
+                memory_set_sound_timer(mem, memory_get_sound_timer(mem) - 1);
             }
             ready = true;
         }
@@ -345,17 +345,22 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
     case 0xF:
         switch (getNN(instruction)) {
         case 0x07:
-            memory_set_register(mem, getX(instruction), mem->delay_timer);
+            memory_set_register(mem, getX(instruction),
+                                memory_get_delay_timer(mem));
             break;
         case 0x15:
-            mem->delay_timer = memory_get_register(mem, getX(instruction));
+            memory_set_delay_timer(mem,
+                                   memory_get_register(mem, getX(instruction)));
             break;
         case 0x18:
-            mem->sound_timer = memory_get_register(mem, getX(instruction));
+            memory_set_sound_timer(mem,
+                                   memory_get_register(mem, getX(instruction)));
             break;
         case 0x1E:
-            mem->index_register += memory_get_register(mem, getX(instruction));
-            if (mem->index_register > 0xFFF) {
+            address = memory_get_index_register(mem);
+            value = memory_get_register(mem, getX(instruction));
+            memory_set_index_register(mem, address + value);
+            if (address + value > 0xFFF) {
                 memory_set_register(mem, 0xF, 1);
             }
             break;
@@ -372,13 +377,14 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
             memory_set_index_register(mem, 0x50 + value * 5);
             break;
         case 0x33:
+            address = memory_get_index_register(mem);
             value = memory_get_register(mem, getX(instruction));
             uint8_t buffer = (value / 100);
-            *(mem->memory + mem->index_register) = buffer;
+            *(mem->memory + address) = buffer;
             buffer = (value % 100) / 10;
-            *(mem->memory + mem->index_register + 1) = buffer;
+            *(mem->memory + address + 1) = buffer;
             buffer = (value % 10);
-            *(mem->memory + mem->index_register + 2) = buffer;
+            *(mem->memory + address + 2) = buffer;
             break;
         case 0x55:
             memory_store_registers(mem, getX(instruction),

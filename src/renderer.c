@@ -17,6 +17,38 @@ renderer *renderer_init(SDL_Renderer *sdl_renderer) {
 }
 void renderer_free(renderer *r) { free(r); }
 
+bool render_image(renderer *r) {
+    uint64_t *target = r->bits;
+    uint64_t comparator = 1;
+    comparator = comparator << 63;
+    SDL_FRect rects_to_render[WIDTH * HEIGHT];
+    int count = 0;
+    // Determine the pixels to to redraw by stepping through the bits of the
+    // rows. The bits are stepped through and each bit represents a pixel.
+    for (size_t i = 0; i < HEIGHT * WIDTH; i++) {
+        if ((*target & comparator) != 0) {
+            // render white
+            rects_to_render[count++] = r->pixels[i];
+        }
+        if ((comparator >> 1) == 0) {
+            comparator = comparator << 63;
+            target += 1;
+        } else {
+            comparator = comparator >> 1;
+        }
+    }
+    // To make rendering easy, the screen is first set to black everywhere.
+    //
+    // Afterwards the rectangles that have been determined to be enabled
+    // will be redrawn as white rectangles.
+    SDL_SetRenderDrawColor(r->sdl_renderer, 22, 22, 22, 255);
+    SDL_RenderClear(r->sdl_renderer);
+    SDL_SetRenderDrawColor(r->sdl_renderer, 200, 200, 200, 255);
+    SDL_RenderFillRects(r->sdl_renderer, rects_to_render, count);
+    SDL_RenderPresent(r->sdl_renderer);
+    return true;
+}
+
 int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
                   uint8_t height, bool clipping) {
     uint64_t *row = r->bits + y;
@@ -42,7 +74,11 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
         } else {
             coloring = coloring << (56 - x);
         }
-        // Check for overriden bits
+        // Check for overridden bits here.
+        //
+        // If any bits will be overridden during the sprite rendering process
+        // the VF register will need to be set to one, to achieve this, the
+        // result 1 is returned which is interpretable by the calling function.
         if ((*row ^ coloring) != (*row | coloring)) {
             result = 1;
         }
@@ -50,6 +86,8 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
         sprite += 1;
         row += 1;
         if (i + y + 1 == HEIGHT) {
+            // Depending on if clipping is enabled the rendering can just stop
+            // or continue on the top part of the display.
             if (clipping) {
                 break;
             } else {
@@ -57,7 +95,7 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
             }
         }
     }
-    if (!render_image(r, r->bits)) {
+    if (!render_image(r)) {
         result = 2;
     }
     return result;
@@ -67,33 +105,7 @@ bool render_clear(renderer *r) {
     for (int i = 0; i < HEIGHT; i++) {
         r->bits[i] = 0;
     }
-    return render_image(r, r->bits);
-}
-
-bool render_image(renderer *r, uint64_t *bits) {
-    uint64_t *target = bits;
-    uint64_t comparator = 1;
-    comparator = comparator << 63;
-    SDL_FRect rects_to_render[WIDTH * HEIGHT];
-    int count = 0;
-    for (size_t i = 0; i < HEIGHT * WIDTH; i++) {
-        if ((*target & comparator) != 0) {
-            // render white
-            rects_to_render[count++] = r->pixels[i];
-        }
-        if ((comparator >> 1) == 0) {
-            comparator = comparator << 63;
-            target += 1;
-        } else {
-            comparator = comparator >> 1;
-        }
-    }
-    SDL_SetRenderDrawColor(r->sdl_renderer, 0, 0, 0, 0);
-    SDL_RenderClear(r->sdl_renderer);
-    SDL_SetRenderDrawColor(r->sdl_renderer, 255, 255, 255, 255);
-    SDL_RenderFillRects(r->sdl_renderer, rects_to_render, count);
-    SDL_RenderPresent(r->sdl_renderer);
-    return true;
+    return render_image(r);
 }
 
 bool renderer_lineup_pixels(renderer *r) {

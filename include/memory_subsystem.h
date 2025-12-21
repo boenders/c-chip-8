@@ -7,13 +7,15 @@
 #define VARIABLES 16
 #define PROGRAM_START 0x200
 
+// The memory subsystem stores all required information in the 4kB block of
+// memory that is allocated.
+//
+// The first 0x200 bytes are used for the font as well as other internal data
+// such as registers, timers, etc.
+// Everything beyond 0x200 bytes is reserved for applications that shall be
+// run by the system.
 typedef struct {
     uint8_t memory[MEMORY];
-    uint16_t index_register;
-    uint8_t delay_timer;
-    uint8_t sound_timer;
-    uint8_t stack_position;
-    uint8_t registers[VARIABLES];
 } memory_subsystem;
 
 /**
@@ -107,4 +109,20 @@ void memory_store_registers(memory_subsystem *mem, uint8_t count, bool increment
  * Setting the increment flag will increment the index register pointer.
  */
 void memory_load_registers(memory_subsystem *mem, uint8_t count, bool increment);
+/**
+ * Returns the current value of the delay timer.
+ */
+uint8_t memory_get_delay_timer(memory_subsystem *mem);
+/**
+ * Sets the delay timer to a new value.
+ */
+void memory_set_delay_timer(memory_subsystem *mem, uint8_t value);
+/**
+ * Returns the current value of the sound timer.
+ */
+uint8_t memory_get_sound_timer(memory_subsystem *mem);
+/**
+ * Sets the sound timer to a new value.
+ */
+void memory_set_sound_timer(memory_subsystem *mem, uint8_t value);
 #endif // !MEMORY_SUBSYSTEM
