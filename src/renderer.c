@@ -5,12 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-bool lineup_pixels(renderer *r);
+bool renderer_lineup_pixels(renderer *r);
 
 renderer *renderer_init(SDL_Renderer *sdl_renderer) {
     renderer *r = malloc(sizeof(renderer));
     r->sdl_renderer = sdl_renderer;
-    if (!lineup_pixels(r)) {
+    if (!renderer_lineup_pixels(r)) {
         return NULL;
     }
     return r;
@@ -54,6 +54,7 @@ bool render_clear(renderer *r) {
 }
 
 bool render_image(renderer *r, uint64_t *bits) {
+    printf("Rendering image\n");
     uint64_t *target = bits;
     uint64_t comparator = 1;
     comparator = comparator << 63;
@@ -79,7 +80,7 @@ bool render_image(renderer *r, uint64_t *bits) {
     return true;
 }
 
-bool lineup_pixels(renderer *r) {
+bool renderer_lineup_pixels(renderer *r) {
     int width = 0, height = 0;
     if (!SDL_GetRenderOutputSize(r->sdl_renderer, &width, &height)) {
         return false;
