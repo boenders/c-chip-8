@@ -24,7 +24,7 @@ void print_help();
 uint8_t flags =
     VF_RESET | MEMORY_INDEX_INCREMENT | DISPLAY_WAIT | DISPLAY_CLIPPING;
 // Flag used to slow sprite rendering to 60 sprites a second.
-bool ready = true;
+bool display_ready = true;
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -107,10 +107,15 @@ int main(int argc, char **argv) {
     int old_width = 0;
     int old_height = 0;
     uint64_t timestamp = SDL_GetTicksNS();
-    // SDL_KeyboardEvent *ke;
     SDL_Scancode code;
     while (running) {
         SDL_Event e;
+        // Catch all SDL events outside of the normal c-chip logic to keep it
+        // separate.
+        //
+        // Keypresses are saved to a variable that is passed to the decode
+        // function. Only the last keypress is held in this variable, if
+        // multiple keys are pressed only the last one is forwarded.
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT ||
                 e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
@@ -125,6 +130,11 @@ int main(int argc, char **argv) {
 
         int current_width = 0;
         int current_height = 0;
+        /**
+         * Track the screen size outside of the normal chip-8 logic as this
+         * would not be a part of it normally. If any change in size is
+         * detected realign the renderer pixels to keep using the full screen.
+         */
         SDL_GetRenderOutputSize(ren, &current_width, &current_height);
         if (old_width != current_width || old_height != current_height) {
             old_width = current_width;
@@ -132,11 +142,18 @@ int main(int argc, char **argv) {
             renderer_lineup_pixels(r);
         }
 
-        // Every 16ms -> 60 reductions a second
+        // Timers need to run at 60 reductions a second, thus about 16.6ms is
+        // the targeted wait time for each reduction.
         if (16000000 < SDL_GetTicksNS() - timestamp) {
-            ready = true;
-            timestamp = SDL_GetTicksNS();
+            // When display waiting is enabled (default=true) only one sprite
+            // can be drawn per frame. The application targets a refresh rate
+            // of 60 (the same as the chip-8), so putting it in the timer loop
+            // is a sensible choice.
+            //
+            // True equals the display being able to take another sprite.
+            display_ready = true;
 
+            timestamp = SDL_GetTicksNS();
             if (memory_get_delay_timer(mem) > 0) {
                 memory_set_delay_timer(mem, memory_get_delay_timer(mem) - 1);
             }
@@ -145,6 +162,8 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Main logic loop of the chip-8, getting the next instruction and then
+        // decoding + executing it in one step.
         uint16_t instruction = memory_get_instruction(mem);
         decode(instruction, mem, r, code);
 
@@ -310,12 +329,14 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
         memory_set_register(mem, address, (rand() % 0xFF) & value);
         break;
     case 0xD:
-        if ((flags & DISPLAY_WAIT) && !ready) {
+        // The display_ready counter for sprite drawing is only considered
+        // when the display wait flag is set.
+        if ((flags & DISPLAY_WAIT) && !display_ready) {
             memory_repeat_instruction(mem);
             break;
         }
 
-        ready = false;
+        display_ready = false;
         uint8_t register_x = getX(instruction);
         uint8_t register_y = getY(instruction);
         uint8_t count = getN(instruction);
@@ -375,6 +396,12 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
             memory_set_index_register(mem, 0x50 + value * 5);
             break;
         case 0x33:
+            // Split the number in three parts and set registers starting from
+            // the index register.
+            // 257
+            // index_register = 2
+            // index_register+1 = 5
+            // index_register+2 = 7
             address = memory_get_index_register(mem);
             value = memory_get_register(mem, getX(instruction));
             uint8_t buffer = (value / 100);

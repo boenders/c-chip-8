@@ -104,9 +104,7 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
 }
 
 bool render_clear(renderer *r) {
-    for (int i = 0; i < HEIGHT; i++) {
-        r->bits[i] = 0;
-    }
+    memset(r->bits, 0, sizeof(r->bits));
     return render_image(r);
 }
 
