@@ -19,6 +19,8 @@ The emulator is fully functional and supports enabling/disabling quirks in chip-
 - \-\-jumping-use-vx  The jumping op codes jump to the given address + the value in the register pointed to by X instead of always using register 0. 
 
 The default without any flags applied looks like this, when using Timendus quirks test [link](https://github.com/Timendus/chip8-test-suite?tab=readme-ov-file).
+<img width="844" height="992" alt="grafik" src="https://github.com/user-attachments/assets/dc364e6c-b4c8-45fb-bb4d-40b3b1d268f5" />
+
 
 ### Build and Run
 
