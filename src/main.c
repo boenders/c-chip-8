@@ -184,8 +184,6 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
     uint8_t value_two;
     uint8_t key_code;
 
-    printf("Registered an instruction %x\n", instruction);
-
     switch ((instruction >> 12) & 0x000F) {
     case 0x0:
         if (instruction == 0x00E0) {

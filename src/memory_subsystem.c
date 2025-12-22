@@ -110,20 +110,20 @@ void memory_instruction_jump_to(memory_subsystem *mem, uint16_t value) {
     // To ignore endian issues the bits from the instruction are directly
     // memcopied over to the stack.
     uint16_t *instruction = (uint16_t *)(mem->memory + INSTRUCTION_POINTER);
-    uint8_t *stack_position = mem->memory + STACK_POSITION;
-    memcpy(mem->memory + STACK_POSITION + sizeof(uint16_t) * *stack_position,
+    uint8_t *stack_length = mem->memory + STACK_LENGTH;
+    memcpy(mem->memory + STACK_POSITION + sizeof(uint16_t) * *stack_length,
            instruction, sizeof(uint16_t));
-    *stack_position += 1;
+    *stack_length += 1;
     *instruction = value;
 }
 void memory_instruction_jump_back(memory_subsystem *mem) {
     // To ignore endian issues the bits from the stack are directly
     // memcopied back to the instruction register.
     uint16_t *instruction = (uint16_t *)(mem->memory + INSTRUCTION_POINTER);
-    uint8_t *stack_position = mem->memory + STACK_POSITION;
-    *stack_position -= 1;
+    uint8_t *stack_length = mem->memory + STACK_LENGTH;
+    *stack_length -= 1;
     memcpy(instruction,
-           mem->memory + STACK_POSITION + sizeof(uint16_t) * *stack_position,
+           mem->memory + STACK_POSITION + sizeof(uint16_t) * *stack_length,
            sizeof(uint16_t));
 }
 void memory_store_registers(memory_subsystem *mem, uint8_t count,
