@@ -5,11 +5,9 @@ project(
     LANGUAGES C
 )
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
+set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Options you can toggle
@@ -34,13 +32,24 @@ endif()
 
 
 
+
 add_subdirectory(vendored/SDL EXCLUDE_FROM_ALL)
 
 file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS src/*.c)
 add_executable(c-chip-8 ${APP_SOURCES})
 target_include_directories(c-chip-8 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(c-chip-8 PRIVATE BL_VERSION="${PROJECT_VERSION}")
+target_compile_features(c-chip-8 PRIVATE c_std_11)
 target_link_libraries(c-chip-8 PRIVATE SDL3::SDL3)
+if(EMSCRIPTEN)
+    target_compile_definitions(c-chip-8 PRIVATE PLATFORM_WEB)
+    target_link_options(c-chip-8 PRIVATE
+        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap"
+        "-sINVOKE_RUN=0"
+    )
+else()
+    target_compile_definitions(c-chip-8 PRIVATE PLATFORM_NATIVE)
+endif()
 
 # if (ENABLE_TESTING)
 #     include(CTest)

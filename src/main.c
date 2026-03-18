@@ -13,20 +13,112 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef PLATFORM_WEB
+#include <emscripten.h>
+#endif
 
-void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
-            SDL_Scancode code);
+typedef struct {
+    // Initial setup state;
+    uint8_t flags;
+    bool display_ready;
+    SDL_Window *win;
+    SDL_Renderer *ren;
+    renderer *r;
+    memory_subsystem *mem;
+
+    // Running application state;
+    int running;
+    int old_width;
+    int old_height;
+    uint64_t timestamp;
+    SDL_Scancode code;
+} AppState;
+
+void decode(uint16_t instruction, AppState *state);
 uint8_t scancode_to_key(SDL_Scancode code);
 void print_help();
 
-// Flags to enable/disable quirky behavior depending on application
-// requirements.
-uint8_t flags =
-    VF_RESET | MEMORY_INDEX_INCREMENT | DISPLAY_WAIT | DISPLAY_CLIPPING;
-// Flag used to slow sprite rendering to 60 sprites a second.
-bool display_ready = true;
+void tick(void *arg) {
+    AppState *state = (AppState *)arg;
+
+    SDL_Event e;
+    // Catch all SDL events outside of the normal c-chip logic to keep it
+    // separate.
+    //
+    // Keypresses are saved to a variable that is passed to the decode
+    // function. Only the last keypress is held in this variable, if
+    // multiple keys are pressed only the last one is forwarded.
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_EVENT_QUIT ||
+            e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+            state->running = 0;
+#ifdef __EMSCRIPTEN__
+            emscripten_cancel_main_loop();
+#endif
+        }
+        if (e.type == SDL_EVENT_KEY_DOWN) {
+            state->code = (*(SDL_KeyboardEvent *)&e).scancode;
+        }
+        if (e.type == SDL_EVENT_KEY_UP) {
+            state->code = 0;
+        }
+    }
+
+    int current_width = 0;
+    int current_height = 0;
+    /**
+     * Track the screen size outside of the normal chip-8 logic as this
+     * would not be a part of it normally. If any change in size is
+     * detected realign the renderer pixels to keep using the full screen.
+     */
+    SDL_GetRenderOutputSize(state->ren, &current_width, &current_height);
+    if (state->old_width != current_width ||
+        state->old_height != current_height) {
+        state->old_width = current_width;
+        state->old_height = current_height;
+        renderer_lineup_pixels(state->r);
+    }
+
+    // Timers need to run at 60 reductions a second, thus about 16.6ms is
+    // the targeted wait time for each reduction.
+    if (16000000 < SDL_GetTicksNS() - state->timestamp) {
+        // When display waiting is enabled (default=true) only one sprite
+        // can be drawn per frame. The application targets a refresh rate
+        // of 60 (the same as the chip-8), so putting it in the timer loop
+        // is a sensible choice.
+        //
+        // True equals the display being able to take another sprite.
+        state->display_ready = true;
+
+        state->timestamp = SDL_GetTicksNS();
+        if (memory_get_delay_timer(state->mem) > 0) {
+            memory_set_delay_timer(state->mem,
+                                   memory_get_delay_timer(state->mem) - 1);
+        }
+        if (memory_get_sound_timer(state->mem) > 0) {
+            memory_set_sound_timer(state->mem,
+                                   memory_get_sound_timer(state->mem) - 1);
+        }
+    }
+
+    // Main logic loop of the chip-8, getting the next instruction and then
+    // decoding + executing it in one step.
+    uint16_t instruction = memory_get_instruction(state->mem);
+    decode(instruction, state);
+
+    // 1.5ms -> achieve an execution time roughly similar to the original
+    // chip-8 system.
+    SDL_DelayNS(1500000);
+}
 
 int main(int argc, char **argv) {
+    // Flags to enable/disable quirky behavior depending on application
+    // requirements.
+    uint8_t flags =
+        VF_RESET | MEMORY_INDEX_INCREMENT | DISPLAY_WAIT | DISPLAY_CLIPPING;
+    // Flag used to slow sprite rendering to 60 sprites a second.
+    bool display_ready = true;
+
     if (argc < 2) {
         print_help();
         return 1;
@@ -89,7 +181,6 @@ int main(int argc, char **argv) {
         goto cleanup_window;
     }
 
-    int running = 1;
     renderer *r = renderer_init(ren);
     memory_subsystem *mem = memory_init();
     if (!r || !mem) {
@@ -102,75 +193,46 @@ int main(int argc, char **argv) {
     if (!fread(mem->memory + PROGRAM_START, 1, MEMORY - PROGRAM_START, fptr)) {
         rc = 1;
         goto cleanup;
+    } else {
+        fclose(fptr);
+        fptr = NULL;
     }
 
+    int running = 1;
     int old_width = 0;
     int old_height = 0;
     uint64_t timestamp = SDL_GetTicksNS();
     SDL_Scancode code;
-    while (running) {
-        SDL_Event e;
-        // Catch all SDL events outside of the normal c-chip logic to keep it
-        // separate.
-        //
-        // Keypresses are saved to a variable that is passed to the decode
-        // function. Only the last keypress is held in this variable, if
-        // multiple keys are pressed only the last one is forwarded.
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT ||
-                e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
-                running = 0;
-            if (e.type == SDL_EVENT_KEY_DOWN) {
-                code = (*(SDL_KeyboardEvent *)&e).scancode;
-            }
-            if (e.type == SDL_EVENT_KEY_UP) {
-                code = 0;
-            }
-        }
-
-        int current_width = 0;
-        int current_height = 0;
-        /**
-         * Track the screen size outside of the normal chip-8 logic as this
-         * would not be a part of it normally. If any change in size is
-         * detected realign the renderer pixels to keep using the full screen.
-         */
-        SDL_GetRenderOutputSize(ren, &current_width, &current_height);
-        if (old_width != current_width || old_height != current_height) {
-            old_width = current_width;
-            old_height = current_height;
-            renderer_lineup_pixels(r);
-        }
-
-        // Timers need to run at 60 reductions a second, thus about 16.6ms is
-        // the targeted wait time for each reduction.
-        if (16000000 < SDL_GetTicksNS() - timestamp) {
-            // When display waiting is enabled (default=true) only one sprite
-            // can be drawn per frame. The application targets a refresh rate
-            // of 60 (the same as the chip-8), so putting it in the timer loop
-            // is a sensible choice.
-            //
-            // True equals the display being able to take another sprite.
-            display_ready = true;
-
-            timestamp = SDL_GetTicksNS();
-            if (memory_get_delay_timer(mem) > 0) {
-                memory_set_delay_timer(mem, memory_get_delay_timer(mem) - 1);
-            }
-            if (memory_get_sound_timer(mem) > 0) {
-                memory_set_sound_timer(mem, memory_get_sound_timer(mem) - 1);
-            }
-        }
-
-        // Main logic loop of the chip-8, getting the next instruction and then
-        // decoding + executing it in one step.
-        uint16_t instruction = memory_get_instruction(mem);
-        decode(instruction, mem, r, code);
-
-        // 1.5ms -> achieve an execution time roughly similar to the original
-        // chip-8 system.
-        SDL_DelayNS(1500000);
+    AppState *state = malloc(sizeof(*state));
+    if (state == NULL) {
+        goto cleanup;
     }
+
+    state->flags = flags;
+    state->display_ready = display_ready;
+    state->win = win;
+    state->ren = ren;
+    state->r = r;
+    state->mem = mem;
+
+    state->running = running;
+    state->old_width = old_width;
+    state->old_height = old_height;
+    state->timestamp = timestamp;
+    state->code = code;
+
+#ifdef PLATFORM_WEB
+    emscripten_set_main_loop_arg(tick, state, 0, 1);
+#else
+    while (running) {
+        tick(state);
+        if (state->running == 0) {
+            break;
+        }
+    }
+#endif
+
+    free(state);
 cleanup:
     memory_free(mem);
     renderer_free(r);
@@ -180,7 +242,9 @@ cleanup_window:
     SDL_DestroyWindow(win);
     SDL_Quit();
 cleanup_file:
-    fclose(fptr);
+    if (fptr != NULL) {
+        fclose(fptr);
+    }
 exit:
     return rc;
 }
@@ -196,8 +260,7 @@ exit:
 // Get the second, third and fourth nibble of an instruction.
 #define getNNN(v) v & 0x0FFF
 
-void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
-            SDL_Scancode code) {
+void decode(uint16_t instruction, AppState *state) {
     uint16_t address;
     uint8_t value;
     uint8_t value_two;
@@ -206,194 +269,194 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
     switch ((instruction >> 12) & 0x000F) {
     case 0x0:
         if (instruction == 0x00E0) {
-            render_clear(r);
+            render_clear(state->r);
         } else if (instruction == 0x00EE) {
-            memory_instruction_jump_back(mem);
+            memory_instruction_jump_back(state->mem);
         }
         break;
     case 0x1:
         address = getNNN(instruction);
-        memory_set_instruction(mem, address);
+        memory_set_instruction(state->mem, address);
         break;
     case 0x2:
         address = getNNN(instruction);
-        memory_instruction_jump_to(mem, address);
+        memory_instruction_jump_to(state->mem, address);
         break;
     case 0x3:
         value = getNN(instruction);
-        if (memory_get_register(mem, getX(instruction)) == value) {
-            memory_skip_instruction(mem);
+        if (memory_get_register(state->mem, getX(instruction)) == value) {
+            memory_skip_instruction(state->mem);
         }
         break;
     case 0x4:
         value = getNN(instruction);
-        if (memory_get_register(mem, getX(instruction)) != value) {
-            memory_skip_instruction(mem);
+        if (memory_get_register(state->mem, getX(instruction)) != value) {
+            memory_skip_instruction(state->mem);
         }
         break;
     case 0x5:
-        if (memory_get_register(mem, getX(instruction)) ==
-            memory_get_register(mem, getY(instruction))) {
-            memory_skip_instruction(mem);
+        if (memory_get_register(state->mem, getX(instruction)) ==
+            memory_get_register(state->mem, getY(instruction))) {
+            memory_skip_instruction(state->mem);
         }
         break;
     case 0x6:
         address = getX(instruction);
         value = getNN(instruction);
-        memory_set_register(mem, address, value);
+        memory_set_register(state->mem, address, value);
         break;
     case 0x7:
         address = getX(instruction);
         value = getNN(instruction);
-        memory_set_register(mem, address,
-                            memory_get_register(mem, address) + value);
+        memory_set_register(state->mem, address,
+                            memory_get_register(state->mem, address) + value);
         break;
     case 0x8:
         address = getX(instruction);
-        uint8_t x_value = memory_get_register(mem, getX(instruction));
-        uint8_t y_value = memory_get_register(mem, getY(instruction));
+        uint8_t x_value = memory_get_register(state->mem, getX(instruction));
+        uint8_t y_value = memory_get_register(state->mem, getY(instruction));
         switch (getN(instruction)) {
         case 0x0:
-            memory_set_register(mem, address, y_value);
+            memory_set_register(state->mem, address, y_value);
             break;
         case 0x1:
-            memory_set_register(mem, address, x_value | y_value);
-            if (flags & VF_RESET) {
-                memory_set_register(mem, 0xF, 0);
+            memory_set_register(state->mem, address, x_value | y_value);
+            if (state->flags & VF_RESET) {
+                memory_set_register(state->mem, 0xF, 0);
             }
             break;
         case 0x2:
-            memory_set_register(mem, address, x_value & y_value);
-            if (flags & VF_RESET) {
-                memory_set_register(mem, 0xF, 0);
+            memory_set_register(state->mem, address, x_value & y_value);
+            if (state->flags & VF_RESET) {
+                memory_set_register(state->mem, 0xF, 0);
             }
             break;
         case 0x3:
-            memory_set_register(mem, address, x_value ^ y_value);
-            if (flags & VF_RESET) {
-                memory_set_register(mem, 0xF, 0);
+            memory_set_register(state->mem, address, x_value ^ y_value);
+            if (state->flags & VF_RESET) {
+                memory_set_register(state->mem, 0xF, 0);
             }
             break;
         case 0x4:
-            memory_set_register(mem, address, x_value + y_value);
-            memory_set_register(mem, 0xF, x_value + y_value > UINT8_MAX);
+            memory_set_register(state->mem, address, x_value + y_value);
+            memory_set_register(state->mem, 0xF, x_value + y_value > UINT8_MAX);
             break;
         case 0x5:
-            memory_set_register(mem, address, x_value - y_value);
-            memory_set_register(mem, 0xF, x_value >= y_value);
+            memory_set_register(state->mem, address, x_value - y_value);
+            memory_set_register(state->mem, 0xF, x_value >= y_value);
             break;
         case 0x6:
-            if (!(flags & SHIFT_USE_VX)) {
+            if (!(state->flags & SHIFT_USE_VX)) {
                 x_value = y_value;
             }
-            memory_set_register(mem, address, x_value >> 1);
+            memory_set_register(state->mem, address, x_value >> 1);
             // Set to shifted out bis value, bit 1.
-            memory_set_register(mem, 0xF, x_value & 0x01);
+            memory_set_register(state->mem, 0xF, x_value & 0x01);
             break;
         case 0x7:
-            memory_set_register(mem, address, y_value - x_value);
-            memory_set_register(mem, 0xF, y_value >= x_value);
+            memory_set_register(state->mem, address, y_value - x_value);
+            memory_set_register(state->mem, 0xF, y_value >= x_value);
             break;
         case 0xe:
-            if (!(flags & SHIFT_USE_VX)) {
+            if (!(state->flags & SHIFT_USE_VX)) {
                 x_value = y_value;
             }
-            memory_set_register(mem, address, x_value << 1);
+            memory_set_register(state->mem, address, x_value << 1);
             // Set to shifted out bis value, bit 8.
-            memory_set_register(mem, 0xF, (x_value & 0x80) != 0);
+            memory_set_register(state->mem, 0xF, (x_value & 0x80) != 0);
             break;
         }
         break;
     case 0x9:
-        if (memory_get_register(mem, getX(instruction)) !=
-            memory_get_register(mem, getY(instruction))) {
-            memory_skip_instruction(mem);
+        if (memory_get_register(state->mem, getX(instruction)) !=
+            memory_get_register(state->mem, getY(instruction))) {
+            memory_skip_instruction(state->mem);
         }
         break;
     case 0xA:
         address = getNNN(instruction);
-        memory_set_index_register(mem, address);
+        memory_set_index_register(state->mem, address);
         break;
     case 0xB:
         address = getNNN(instruction);
-        if (flags & JUMPING_USE_VX) {
-            value = memory_get_register(mem, getX(instruction));
+        if (state->flags & JUMPING_USE_VX) {
+            value = memory_get_register(state->mem, getX(instruction));
         } else {
-            value = memory_get_register(mem, 0);
+            value = memory_get_register(state->mem, 0);
         }
-        memory_set_instruction(mem, address + value);
+        memory_set_instruction(state->mem, address + value);
         break;
     case 0xC:
         address = getX(instruction);
         value = getNN(instruction);
-        memory_set_register(mem, address, (rand() % 0xFF) & value);
+        memory_set_register(state->mem, address, (rand() % 0xFF) & value);
         break;
     case 0xD:
         // The display_ready counter for sprite drawing is only considered
         // when the display wait flag is set.
-        if ((flags & DISPLAY_WAIT) && !display_ready) {
-            memory_repeat_instruction(mem);
+        if ((state->flags & DISPLAY_WAIT) && !state->display_ready) {
+            memory_repeat_instruction(state->mem);
             break;
         }
 
-        display_ready = false;
+        state->display_ready = false;
         uint8_t register_x = getX(instruction);
         uint8_t register_y = getY(instruction);
         uint8_t count = getN(instruction);
-        uint8_t *sprite = memory_get_sprite(mem);
+        uint8_t *sprite = memory_get_sprite(state->mem);
 
-        int result =
-            render_sprite(r, memory_get_register(mem, register_x) % WIDTH,
-                          memory_get_register(mem, register_y) % HEIGHT, sprite,
-                          count, (flags & DISPLAY_CLIPPING));
+        int result = render_sprite(
+            state->r, memory_get_register(state->mem, register_x) % WIDTH,
+            memory_get_register(state->mem, register_y) % HEIGHT, sprite, count,
+            (state->flags & DISPLAY_CLIPPING));
         if (result == 1) {
-            memory_set_register(mem, 0xF, 1);
+            memory_set_register(state->mem, 0xF, 1);
         } else {
-            memory_set_register(mem, 0xF, 0);
+            memory_set_register(state->mem, 0xF, 0);
         }
         break;
     case 0xE:
-        key_code = scancode_to_key(code);
-        uint8_t key = memory_get_register(mem, getX(instruction));
+        key_code = scancode_to_key(state->code);
+        uint8_t key = memory_get_register(state->mem, getX(instruction));
         if ((getNN(instruction)) == 0x9E && key == key_code) {
-            memory_skip_instruction(mem);
+            memory_skip_instruction(state->mem);
         } else if ((getNN(instruction)) == 0xA1 && key != key_code) {
-            memory_skip_instruction(mem);
+            memory_skip_instruction(state->mem);
         }
         break;
     case 0xF:
         switch (getNN(instruction)) {
         case 0x07:
-            memory_set_register(mem, getX(instruction),
-                                memory_get_delay_timer(mem));
+            memory_set_register(state->mem, getX(instruction),
+                                memory_get_delay_timer(state->mem));
             break;
         case 0x15:
-            memory_set_delay_timer(mem,
-                                   memory_get_register(mem, getX(instruction)));
+            memory_set_delay_timer(
+                state->mem, memory_get_register(state->mem, getX(instruction)));
             break;
         case 0x18:
-            memory_set_sound_timer(mem,
-                                   memory_get_register(mem, getX(instruction)));
+            memory_set_sound_timer(
+                state->mem, memory_get_register(state->mem, getX(instruction)));
             break;
         case 0x1E:
-            address = memory_get_index_register(mem);
-            value = memory_get_register(mem, getX(instruction));
-            memory_set_index_register(mem, address + value);
+            address = memory_get_index_register(state->mem);
+            value = memory_get_register(state->mem, getX(instruction));
+            memory_set_index_register(state->mem, address + value);
             if (address + value > 0xFFF) {
-                memory_set_register(mem, 0xF, 1);
+                memory_set_register(state->mem, 0xF, 1);
             }
             break;
         case 0x0A:
-            key_code = scancode_to_key(code);
+            key_code = scancode_to_key(state->code);
             if (key_code == 0xFF) {
-                memory_repeat_instruction(mem);
+                memory_repeat_instruction(state->mem);
             } else {
-                memory_set_register(mem, getX(instruction), key_code);
+                memory_set_register(state->mem, getX(instruction), key_code);
             }
             break;
         case 0x29:
-            value = memory_get_register(mem, getX(instruction));
-            memory_set_index_register(mem, 0x50 + value * 5);
+            value = memory_get_register(state->mem, getX(instruction));
+            memory_set_index_register(state->mem, 0x50 + value * 5);
             break;
         case 0x33:
             // Split the number in three parts and set registers starting from
@@ -402,22 +465,22 @@ void decode(uint16_t instruction, memory_subsystem *mem, renderer *r,
             // index_register = 2
             // index_register+1 = 5
             // index_register+2 = 7
-            address = memory_get_index_register(mem);
-            value = memory_get_register(mem, getX(instruction));
+            address = memory_get_index_register(state->mem);
+            value = memory_get_register(state->mem, getX(instruction));
             uint8_t buffer = (value / 100);
-            *(mem->memory + address) = buffer;
+            *(state->mem->memory + address) = buffer;
             buffer = (value % 100) / 10;
-            *(mem->memory + address + 1) = buffer;
+            *(state->mem->memory + address + 1) = buffer;
             buffer = (value % 10);
-            *(mem->memory + address + 2) = buffer;
+            *(state->mem->memory + address + 2) = buffer;
             break;
         case 0x55:
-            memory_store_registers(mem, getX(instruction),
-                                   flags & MEMORY_INDEX_INCREMENT);
+            memory_store_registers(state->mem, getX(instruction),
+                                   state->flags & MEMORY_INDEX_INCREMENT);
             break;
         case 0x65:
-            memory_load_registers(mem, getX(instruction),
-                                  flags & MEMORY_INDEX_INCREMENT);
+            memory_load_registers(state->mem, getX(instruction),
+                                  state->flags & MEMORY_INDEX_INCREMENT);
             break;
         }
     }
