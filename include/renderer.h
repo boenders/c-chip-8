@@ -4,6 +4,10 @@
 
 #define WIDTH 64
 #define HEIGHT 32
+#define ENABLED_PIXEL 255
+#define DIMMING_PIXEL 253
+#define WHITE_PIXEL 200
+#define BLACK_PIXEL 22
 
 typedef struct {
     SDL_Renderer *sdl_renderer;
@@ -11,13 +15,10 @@ typedef struct {
     //
     // Prepared to be used during the rendering process.
     SDL_FRect pixels[WIDTH * HEIGHT];
-    // Constant 64 as each bit in the 64-bit integer will represent one pixel
-    // on the screen.
-    //
-    // Using 64-bit ints is very convenient as each value in the array will
-    // represent exactly one full row of the display making it very easy to
-    // work with.
-    uint64_t bits[WIDTH*HEIGHT / 64];
+    // Brightness values for each pixel to determine its visuals. Even though
+    // pixels are simply turned on/off for a chip-8 this allows removing the
+    // abrupt switching and replacing it with a softer CRT-like fade.
+    uint8_t pixel_values[WIDTH * HEIGHT];
 } renderer;
 /**
  * Initializes a new renderer with a screen size of 64 by 32 pixels.

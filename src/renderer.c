@@ -9,7 +9,7 @@ bool renderer_lineup_pixels(renderer *r);
 
 renderer *renderer_init(SDL_Renderer *sdl_renderer) {
     renderer *r = calloc(1, sizeof *r);
-    memset(r->bits, 0, sizeof(r->bits));
+    memset(r->pixel_values, 0, sizeof(r->pixel_values));
     memset(r->pixels, 0, sizeof(r->pixels));
     r->sdl_renderer = sdl_renderer;
     if (!renderer_lineup_pixels(r)) {
@@ -20,80 +20,91 @@ renderer *renderer_init(SDL_Renderer *sdl_renderer) {
 void renderer_free(renderer *r) { free(r); }
 
 bool render_image(renderer *r) {
-    uint64_t *target = r->bits;
-    uint64_t comparator = 1;
-    comparator = comparator << 63;
-    SDL_FRect rects_to_render[WIDTH * HEIGHT];
-    int count = 0;
-    // Determine the pixels to to redraw by stepping through the bits of the
-    // rows. The bits are stepped through and each bit represents a pixel.
-    for (size_t i = 0; i < HEIGHT * WIDTH; i++) {
-        if ((*target & comparator) != 0) {
-            // render white
-            rects_to_render[count++] = r->pixels[i];
-        }
-        if ((comparator >> 1) == 0) {
-            comparator = comparator << 63;
-            target += 1;
-        } else {
-            comparator = comparator >> 1;
-        }
-    }
     // To make rendering easy, the screen is first set to black everywhere.
     //
     // Afterwards the rectangles that have been determined to be enabled
     // will be redrawn as white rectangles.
-    SDL_SetRenderDrawColor(r->sdl_renderer, 22, 22, 22, 255);
+    SDL_SetRenderDrawColor(r->sdl_renderer, BLACK_PIXEL, BLACK_PIXEL,
+                           BLACK_PIXEL, 255);
     SDL_RenderClear(r->sdl_renderer);
-    SDL_SetRenderDrawColor(r->sdl_renderer, 200, 200, 200, 255);
-    SDL_RenderFillRects(r->sdl_renderer, rects_to_render, count);
+    // Render each rectangle onto the screen. As each one can fade, leading to
+    // many unpredictable colors the rectangles are rendered directly. There are
+    // very few rectangles anyways so this is not a performance concern.
+    for (size_t i = 0; i < HEIGHT * WIDTH; i++) {
+        if (r->pixel_values[i] > 0) {
+            // If the pixel is not fully bright it is being dimmed. The dimming
+            // should continue to gain a smooth looking rendering.
+            if (r->pixel_values[i] < ENABLED_PIXEL) {
+                if (ENABLED_PIXEL - r->pixel_values[i] > r->pixel_values[i]) {
+                    r->pixel_values[i] = 0;
+                } else {
+                    r->pixel_values[i] -= ENABLED_PIXEL - r->pixel_values[i];
+                }
+            }
+
+            uint8_t offset = (ENABLED_PIXEL - r->pixel_values[i]);
+            uint8_t color = offset > (WHITE_PIXEL - BLACK_PIXEL)
+                                ? BLACK_PIXEL
+                                : WHITE_PIXEL - offset;
+
+            SDL_SetRenderDrawColor(r->sdl_renderer, color, color, color, 255);
+            SDL_RenderFillRect(r->sdl_renderer, r->pixels + i);
+        }
+    }
     SDL_RenderPresent(r->sdl_renderer);
     return true;
 }
 
 int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
                   uint8_t height, bool clipping) {
-    uint64_t *row = r->bits + y;
     int result = 0;
-    // Each draw is 8px wide, so only the height needs to be considered.
+    // Each draw is 8px wide, so only the height needs to be considered as a
+    // parameter.
     for (int i = 0; i < height; i++) {
-        // Like the rows the coloring variable uses a uint64 as this
-        // conveniently represents one whole row of the display.
-        //
-        // The sprite is initially positioned in the last eight bits of the
-        // coloring int. Depending on x the coloring will be shifted to the
-        // correct position. the offset constant is 56 (64 - 8), as this will
-        // shift the sprite all the way to the first bit when x = 0.
-        uint64_t coloring = ((*sprite));
-        if (x > 56) {
-            // Ambigous case, depending on the flag a color will be wrapped
-            // to the other side or be clipped because it is off the screen.
-            if (clipping) {
-                coloring = coloring >> (x - 56);
-            } else {
-                coloring = coloring >> (x - 56) | coloring << (56 - x);
-            }
+        uint32_t row = y + i;
+        // Depending on if clipping is enabled the rendering stops
+        // or continues on the top part of the display.
+        if (row >= HEIGHT && !clipping) {
+            break;
         } else {
-            coloring = coloring << (56 - x);
+            row %= HEIGHT;
         }
-        // Check for overridden bits here.
-        //
-        // If any bits will be overridden during the sprite rendering process
-        // the VF register will need to be set to one, to achieve this, the
-        // result 1 is returned which is interpretable by the calling function.
-        if ((*row ^ coloring) != (*row | coloring)) {
-            result = 1;
-        }
-        *row = *row ^ coloring;
-        sprite += 1;
-        row += 1;
-        if (i + y + 1 == HEIGHT) {
-            // Depending on if clipping is enabled the rendering can just stop
-            // or continue on the top part of the display.
-            if (clipping) {
+        // The 8px wide sprite is represented by a single u8 where each bit is a
+        // position on the screen. These bits are masked of and checked one
+        // after the other to set the corresponding pixel on the visualization
+        // array.
+        for (int k = 0; k < 8; k++) {
+            uint32_t position;
+            // Ambigous case, depending on the clipping flag a color will be
+            // wrapped to the other side or be clipped because it is off
+            // the screen.
+            if (x + k >= WIDTH && clipping) {
+                position = row * WIDTH + ((x + k) % WIDTH);
+            } else if (x + k >= WIDTH) {
                 break;
             } else {
-                row = r->bits;
+                position = row * WIDTH + x + k;
+            }
+            // If any bits will be overridden during the sprite rendering
+            // process the VF register will need to be set to one, to achieve
+            // this, the result 1 is returned which is interpretable by the
+            // calling function.
+            if ((*(sprite + i) & (128 >> k)) != 0) {
+                // If the pixel is already enabled, it will be set to the
+                // dimming state. This means any value. This way the renderer
+                // will later slowly hide the pixel with time smoothly.
+                //
+                // The pixel value is a uint8 where 255 is ENABLED and 240 is
+                // DIMMING as the start of the dimming process.
+                if (r->pixel_values[position] == ENABLED_PIXEL) {
+                    r->pixel_values[position] = DIMMING_PIXEL;
+                } else {
+                    // If the pixel was not enabled previously it is set to
+                    // enabled.
+                    r->pixel_values[position] = ENABLED_PIXEL;
+                }
+                // A pixel has changed so result has to be set to one.
+                result = 1;
             }
         }
     }
@@ -104,7 +115,7 @@ int render_sprite(renderer *r, uint8_t x, uint8_t y, uint8_t *sprite,
 }
 
 bool render_clear(renderer *r) {
-    memset(r->bits, 0, sizeof(r->bits));
+    memset(r->pixel_values, 0, sizeof(r->pixel_values));
     return render_image(r);
 }
 
