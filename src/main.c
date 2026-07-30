@@ -17,6 +17,8 @@
 #include <emscripten.h>
 #endif
 
+#define FRAMETIME 16000000 // 16 ms
+
 typedef struct {
     // Initial setup state;
     uint8_t flags;
@@ -40,7 +42,6 @@ void print_help();
 
 void tick(void *arg) {
     AppState *state = (AppState *)arg;
-
     SDL_Event e;
     // Catch all SDL events outside of the normal c-chip logic to keep it
     // separate.
@@ -79,36 +80,33 @@ void tick(void *arg) {
         renderer_lineup_pixels(state->r);
     }
 
-    // Timers need to run at 60 reductions a second, thus about 16.6ms is
-    // the targeted wait time for each reduction.
-    if (16000000 < SDL_GetTicksNS() - state->timestamp) {
-        // When display waiting is enabled (default=true) only one sprite
-        // can be drawn per frame. The application targets a refresh rate
-        // of 60 (the same as the chip-8), so putting it in the timer loop
-        // is a sensible choice.
-        //
-        // True equals the display being able to take another sprite.
-        state->display_ready = true;
+    // When display waiting is enabled (default=true) only one sprite
+    // can be drawn per frame. The application targets a refresh rate
+    // of 60 (the same as the chip-8), so putting it in the timer loop
+    // is a sensible choice.
+    //
+    // True equals the display being able to take another sprite.
+    state->display_ready = true;
 
-        state->timestamp = SDL_GetTicksNS();
-        if (memory_get_delay_timer(state->mem) > 0) {
-            memory_set_delay_timer(state->mem,
-                                   memory_get_delay_timer(state->mem) - 1);
-        }
-        if (memory_get_sound_timer(state->mem) > 0) {
-            memory_set_sound_timer(state->mem,
-                                   memory_get_sound_timer(state->mem) - 1);
-        }
+    state->timestamp = SDL_GetTicksNS();
+    if (memory_get_delay_timer(state->mem) > 0) {
+        memory_set_delay_timer(state->mem,
+                               memory_get_delay_timer(state->mem) - 1);
+    }
+    if (memory_get_sound_timer(state->mem) > 0) {
+        memory_set_sound_timer(state->mem,
+                               memory_get_sound_timer(state->mem) - 1);
     }
 
     // Main logic loop of the chip-8, getting the next instruction and then
     // decoding + executing it in one step.
-    uint16_t instruction = memory_get_instruction(state->mem);
-    decode(instruction, state);
-
-    // 1.5ms -> achieve an execution time roughly similar to the original
-    // chip-8 system.
-    SDL_DelayNS(1500000);
+    //
+    // This is run 11 times to reach around 660 operations per second at 60 fps,
+    // close to the real value of the chip-8
+    for (int i = 0; i < 11; i++) {
+        uint16_t instruction = memory_get_instruction(state->mem);
+        decode(instruction, state);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -180,6 +178,7 @@ int main(int argc, char **argv) {
         rc = 1;
         goto cleanup_window;
     }
+    // SDL_SetRenderVSync(ren, 1);
 
     renderer *r = renderer_init(ren);
     memory_subsystem *mem = memory_init();
@@ -225,9 +224,15 @@ int main(int argc, char **argv) {
     emscripten_set_main_loop_arg(tick, state, 0, 1);
 #else
     while (running) {
+        uint64_t start = SDL_GetTicksNS();
+
         tick(state);
         if (state->running == 0) {
             break;
+        }
+        uint64_t runtime = SDL_GetTicksNS() - start;
+        if (runtime < FRAMETIME) {
+            SDL_DelayNS(FRAMETIME - runtime);
         }
     }
 #endif

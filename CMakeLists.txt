@@ -13,7 +13,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Options you can toggle
 option(ENABLE_WARNINGS "Enable strict compiler warnings" OFF)
 option(ENABLE_SANITIZERS "Enable Address/UB sanitizers in Debug" ON)
-option(ENABLE_TESTING "Enable tests with CTest" ON)
 
 # Common compile options
 if(ENABLE_WARNINGS)
@@ -44,8 +43,11 @@ target_link_libraries(c-chip-8 PRIVATE SDL3::SDL3)
 if(EMSCRIPTEN)
     target_compile_definitions(c-chip-8 PRIVATE PLATFORM_WEB)
     target_link_options(c-chip-8 PRIVATE
-        "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap"
-        "-sINVOKE_RUN=0"
+        "-sEXPORTED_RUNTIME_METHODS=FS, abort"
+        "-sEXPORT_NAME=createChip8Emulator"
+        "-sMODULARIZE"
+        "-sEXPORT_ES6"
+        "-sEXIT_RUNTIME=1"
     )
 else()
     target_compile_definitions(c-chip-8 PRIVATE PLATFORM_NATIVE)
